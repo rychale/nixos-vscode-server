@@ -20,8 +20,8 @@
   krb5,
   enableFHS ? false,
   nodejsPackage ? null,
-  extraRuntimeDependencies ? [ ],
-  installPath ? ["$HOME/.vscode-server"],
+  extraRuntimeDependencies ? [],
+  installPath ? "$HOME/.vscode-server",
   postPatch ? "",
 }: let
   inherit (lib) makeBinPath makeLibraryPath optionalString;
@@ -69,7 +69,7 @@
 
   patchELFScript = writeShellApplication {
     name = "patchelf-vscode-server";
-    runtimeInputs = [ coreutils findutils patchelf ];
+    runtimeInputs = [coreutils findutils patchelf];
     text = ''
       bin_dir="$1"
       patched_file="$bin_dir/.nixos-patched"
@@ -119,14 +119,12 @@
     '';
   };
 
-  autoFixScriptSingle = writeShellApplication {
-    name = "auto-fix-vscode-server-single";
-    runtimeInputs = [ coreutils findutils inotify-tools ];
+  autoFixScript = writeShellApplication {
+    name = "auto-fix-vscode-server";
+    runtimeInputs = [coreutils findutils inotify-tools];
     text = ''
-      base_dir="$1"
-
-      bins_dir_1="$base_dir/bin"
-      bins_dir_2="$base_dir/cli/servers"
+      bins_dir_1=${installPath}/bin
+      bins_dir_2=${installPath}/cli/servers
 
       patch_bin () {
         local actual_dir="$1"
@@ -141,9 +139,9 @@
         old_patched_file="$(basename "$actual_dir")"
         if [[ $old_patched_file == "server" ]]; then
           old_patched_file="$(basename "$(dirname "$actual_dir")")"
-          old_patched_file="$base_dir/.''${old_patched_file%%.*}.patched"
+          old_patched_file="${installPath}/.''${old_patched_file%%.*}.patched"
         else
-          old_patched_file="$base_dir/.''${old_patched_file%%-*}.patched"
+          old_patched_file="${installPath}/.''${old_patched_file%%-*}.patched"
         fi
         if [[ -e $old_patched_file ]]; then
           echo "Migrating old nixos-vscode-server patch marker file to new location in $actual_dir." >&2
@@ -155,7 +153,7 @@
 
         mv "$actual_dir/node" "$actual_dir/node.patched"
 
-        ${optionalString (enableFHS) ''
+        ${optionalString enableFHS ''
         ln -sfT ${nodejsFHS}/bin/node "$actual_dir/node"
       ''}
 
@@ -164,7 +162,7 @@
         #!${runtimeShell}
 
         # The core utilities are missing in the case of WSL, but required by Node.js.
-        PATH="\''${PATH:+\''${PATH}:}${makeBinPath [ coreutils ]}"
+        PATH="\''${PATH:+\''${PATH}:}${makeBinPath [coreutils]}"
 
         # We leave the rest up to the Bash script
         # to keep having to deal with 'sh' compatibility to a minimum.
@@ -172,9 +170,15 @@
 
         # Let Node.js take over as if this script never existed.
         ${
-          let nodePath = (if (nodejs != null)
-          then "${if enableFHS then nodejsFHS else nodejs}/bin/node"
-          else ''\$(dirname "\$0")/node.patched'');
+          let
+            nodePath =
+              if (nodejs != null)
+              then "${
+                if enableFHS
+                then nodejsFHS
+                else nodejs
+              }/bin/node"
+              else ''\$(dirname "\$0")/node.patched'';
           in ''exec "${nodePath}" "\$@"''
         }
         EOF
@@ -192,7 +196,7 @@
         fi
         patch_bin "$bin"
       done < <(find "$bins_dir_1" "$bins_dir_2" -mindepth 1 -maxdepth 1 -type d -printf '%p\0')
- 
+
       while IFS=: read -r bins_dir bin event; do
         # A new version of the VS Code Server is being created.
         if [[ $event == 'CREATE,ISDIR' ]]; then
@@ -217,17 +221,6 @@
           exit 0
         fi
       done < <(inotifywait -q -m -e CREATE,ISDIR -e DELETE_SELF --format '%w:%f:%e' "$bins_dir_1" "$bins_dir_2")
-    '';
-  };
-
-  autoFixScript = writeShellApplication {
-    name = "auto-fix-vscode-server";
-    text = ''
-      installPaths="${toString installPath}"
-
-      for path in $installPaths; do
-        ${autoFixScriptSingle}/bin/auto-fix-vscode-server-single "$path"
-      done
     '';
   };
 in
